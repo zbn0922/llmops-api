@@ -9,6 +9,7 @@
 import os
 
 from flask import Flask
+from flask_cors import CORS
 from flask_migrate import Migrate
 
 from config import Config
@@ -41,6 +42,10 @@ class Http(Flask):
 
         # with self.app_context():
         #     db.create_all()  # 创建所有使用到的表
+
+        # 解决前后端跨域问题
+        CORS(self, resources={r"/*": {"origins": "*", "supports_credentials": True}})
+
         # 注册应用路由
         router.register_router(self)
 
