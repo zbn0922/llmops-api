@@ -10,13 +10,16 @@ import os
 import uuid
 from dataclasses import dataclass
 from operator import itemgetter
+from typing import Dict, Any
 
 from injector import inject
 from langchain.memory import ConversationBufferWindowMemory
 from langchain_community.chat_message_histories import FileChatMessageHistory
+from langchain_core.memory import BaseMemory
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.runnables import RunnablePassthrough, RunnableLambda
+from langchain_core.runnables import RunnablePassthrough, RunnableLambda, RunnableConfig
+from langchain_core.tracers import Run
 from langchain_openai import ChatOpenAI
 
 from internal.exception import NotFoundException
@@ -30,6 +33,23 @@ from pkg.response import success_json, validate_error_json, success_message
 class AppHandler:
     """ 应用控制器 """
     app_service: AppService
+
+    @classmethod
+    def _load_memory_variables(cls, inputs: Dict[str, Any], config: RunnableConfig) -> Dict[str, Any]:
+        """加载记忆变量信息"""
+        configurable = config.get("configurable", {})
+        configurable_memory = configurable.get("memory", None)
+        if configurable_memory is not None and isinstance(configurable_memory, BaseMemory):
+            return configurable_memory.load_memory_variables(inputs)
+        return {"history": []}
+
+    @classmethod
+    def _save_context(cls, run_obj: Run, config: RunnableConfig) -> None:
+        """存储对应的上下文信息到记忆实体中"""
+        configurable = config.get("configurable", {})
+        configurable_memory = configurable.get("memory", None)
+        if configurable_memory is not None and isinstance(configurable_memory, BaseMemory):
+            configurable_memory.save_context(run_obj.inputs, run_obj.outputs)
 
     def debug(self, app_id: uuid.UUID):
         req = CompletionsReq()
@@ -56,13 +76,13 @@ class AppHandler:
             base_url=os.getenv("OPENAI_BASE_URL"),
         )
 
-        chain = RunnablePassthrough.assign(
-            history=RunnableLambda(memory.load_memory_variables) | itemgetter("history"),
-        ) | prompt | llm | StrOutputParser()
+        chain = (RunnablePassthrough.assign(
+            history=RunnableLambda(self._load_memory_variables) | itemgetter("history"),
+        ) | prompt | llm | StrOutputParser()).with_listeners(on_end=self._save_context)
 
         input_val = {"query": req.query.data}
-        content = chain.invoke(input_val)
-        memory.save_context(input_val, {"output": content})
+        content = chain.invoke(input_val, config={"configurable": {"memory": memory}})
+        # memory.save_context(input_val, {"output": content})
         return success_json({"content": content})
 
         # # 构建提示词
